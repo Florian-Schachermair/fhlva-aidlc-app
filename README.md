@@ -477,6 +477,15 @@ One-time setup, with `kubectl` pointing at the cluster and your branch pushed:
 ./scripts/setup-gitops.sh --build-minikube-images latest # minikube, builds the images first
 ```
 
+**On AKS** the images come from ACR, not from minikube. Push them first, then run the setup (it patches the ACR repositories into both stages; `--acr <name>.azurecr.io` overrides the `terraform output` default):
+
+```bash
+./scripts/build-push-acr.sh latest      # then, per release, a new tag: ./scripts/build-push-acr.sh v2 statistics-service
+./scripts/setup-gitops.sh
+```
+
+Use a new tag per release on AKS: nodes do not re-pull a tag they already have. If you ran `deploy-azure.sh` before, `helm uninstall beer-tracker -n beer-tracker` first, or both releases claim the same Application Gateway paths. `--build-minikube-images` is rejected on AKS.
+
 The script creates both namespaces with their own PostgreSQL and secrets, installs Flux (pinned, no bootstrap, no Git token), and points it at the current branch of your `origin`.
 
 **Images on minikube.** There is no registry: a tag in `helmrelease.yaml` must exist inside minikube. Build a new version with

@@ -5,6 +5,7 @@
 # Usage:
 #   ./scripts/setup-gitops.sh [--values-file FILE] [--branch BRANCH] [--repo-url URL]
 #                             [--build-minikube-images TAG] [--stages "staging prod"]
+#                             [--acr LOGIN_SERVER]
 #
 # Run it once per cluster, with kubectl pointing at the cluster. It
 #   1. creates the stage namespaces beer-tracker-staging and beer-tracker-prod, each with
@@ -22,6 +23,10 @@
 #   --build-minikube-images TAG   build the five images into minikube with this tag first
 #   --stages "LIST"               stages to set up (default "staging prod"). "prod" alone is the
 #                                 fallback for small laptops (minikube with 4 GiB): one stack instead of two.
+#   --acr LOGIN_SERVER            AKS (any non-minikube cluster) only: Azure Container Registry the images
+#                                 are pulled from, e.g. myacr.azurecr.io. Default: terraform output
+#                                 acr_login_server of infra/terraform/stages/dev. Push the images first
+#                                 with scripts/build-push-acr.sh. Ignored on minikube.
 #
 # Reads POSTGRES_PASSWORD, INTERNAL_API_KEY and AUTH_RSA_KEY_PATH from .env (as deploy-minikube.sh).
 # Safe to re-run.
@@ -36,6 +41,7 @@ VALUES_FILE=""
 BRANCH=""
 REPO_URL=""
 BUILD_TAG=""
+ACR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,8 +49,9 @@ while [[ $# -gt 0 ]]; do
     --branch) BRANCH="$2"; shift 2 ;;
     --repo-url) REPO_URL="$2"; shift 2 ;;
     --build-minikube-images) BUILD_TAG="$2"; shift 2 ;;
+    --acr) ACR="$2"; shift 2 ;;
     --stages) read -r -a STAGES <<< "$2"; shift 2 ;;
-    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help) sed -n '2,34p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) echo "ERROR: unknown option $1 (see --help)" >&2; exit 1 ;;
   esac
 done
@@ -56,12 +63,19 @@ if [[ -z "$VALUES_FILE" ]]; then
 fi
 [[ -f "$REPO_ROOT/$VALUES_FILE" ]] || { echo "ERROR: $VALUES_FILE not found in the repository root" >&2; exit 1; }
 
+# Non-minikube (AKS): the images live in ACR, so the HelmReleases need the registry (see Flux section).
+if [[ "$CONTEXT" != "minikube" ]]; then
+  [[ -n "$ACR" ]] || ACR=$(terraform -chdir="$REPO_ROOT/infra/terraform/stages/dev" output -raw acr_login_server 2>/dev/null || true)
+  [[ -n "$ACR" ]] || { echo "ERROR: no container registry. Pass --acr <name>.azurecr.io (or apply infra/terraform/stages/dev)" >&2; exit 1; }
+  [[ -z "$BUILD_TAG" ]] || { echo "ERROR: --build-minikube-images only works on minikube; use scripts/build-push-acr.sh for ACR" >&2; exit 1; }
+fi
+
 BRANCH="${BRANCH:-$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)}"
 if [[ -z "$REPO_URL" ]]; then
   REPO_URL=$(git -C "$REPO_ROOT" remote get-url origin)
   # git@github.com:owner/repo.git -> https://github.com/owner/repo.git
   if [[ "$REPO_URL" == git@*:* ]]; then
-    REPO_URL="https://${REPO_URL#git@}"; REPO_URL="${REPO_URL/://}"
+    REPO_URL="${REPO_URL#git@}"; REPO_URL="https://${REPO_URL/://}"
   fi
 fi
 
@@ -89,6 +103,7 @@ echo "Source:   $REPO_URL @ $BRANCH"
 echo "Values:   $VALUES_FILE"
 echo "Flux:     $FLUX_VERSION"
 echo "Stages:   ${STAGES[*]} ($STAGES_PATH)"
+[[ "$CONTEXT" == "minikube" ]] || echo "Registry: $ACR"
 
 # --- Images (minikube only) --------------------------------------------------
 if [[ -n "$BUILD_TAG" ]]; then
@@ -149,6 +164,24 @@ echo "Installing Flux $FLUX_VERSION..."
 kubectl apply -f "$FLUX_MANIFEST" >/dev/null
 kubectl -n flux-system wait deployment --all --for=condition=Available --timeout=5m
 
+# Image repositories on AKS: values-azure.yaml cannot hold them (the registry name differs per
+# deployment), so the Kustomization patches them into every HelmRelease. The patch is only added
+# for non-minikube clusters; on minikube the Kustomization below is exactly as it always was
+# (repositories and pullPolicy: Never come from values-minikube.yaml).
+PATCHES=""
+if [[ "$CONTEXT" != "minikube" ]]; then
+  PATCHES="  patches:"
+  for svc in auth-service beer-tracking-service health-notification-service statistics-service frontend; do
+    PATCHES+="
+    - target:
+        kind: HelmRelease
+      patch: |
+        - op: add
+          path: /spec/values/$svc/image/repository
+          value: $ACR/$svc"
+  done
+fi
+
 echo "Pointing Flux at $REPO_URL ($BRANCH)..."
 kubectl apply -f - <<EOF
 apiVersion: source.toolkit.fluxcd.io/v1
@@ -177,6 +210,7 @@ spec:
   postBuild:
     substitute:
       CLUSTER_VALUES: $VALUES_FILE
+${PATCHES}
 EOF
 
 # --- Wait --------------------------------------------------------------------
