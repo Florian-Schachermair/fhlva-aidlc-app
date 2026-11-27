@@ -63,7 +63,7 @@ spec:
         tag: v3
         replicas: 1
         env: 
-          BEER_TRACKING_INTERNAL_URL: "http://beer-tracker-beer-tracking-service:9999"
+          {}
     frontend:
       image:
         tag: latest
