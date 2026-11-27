@@ -60,7 +60,7 @@ spec:
       # The same block works for every service chart.
       canary:
         enabled: true
-        tag: ""
+        tag: "v3"
         replicas: 1
         env: {}
     frontend:
