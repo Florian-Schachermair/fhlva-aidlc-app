@@ -34,7 +34,7 @@ spec:
   # Runs the chart's Helm tests (the k6 gate) after every install/upgrade.
   # A failing test counts as a failed release and triggers the rollback above.
   test:
-    enable: false
+    enable: true
   values:
     namespace:
       create: false
@@ -54,12 +54,12 @@ spec:
         tag: latest
     statistics-service:
       image:
-        tag: latest
+        tag: v3
       # --- Canary: start = enabled true + tag; promote = image.tag <- canary.tag, enabled false;
       # abort = enabled false (or revert the PR). Traffic share ~ canary.replicas : replicaCount.
       # The same block works for every service chart.
       canary:
-        enabled: false
+        enabled: true
         tag: ""
         replicas: 1
         env: {}
