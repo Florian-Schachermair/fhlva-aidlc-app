@@ -51,10 +51,10 @@ spec:
         tag: latest
     health-notification-service:
       image:
-        tag: latest
+        tag: v2
     statistics-service:
       image:
-        tag: v2
+        tag: latest
     frontend:
       image:
         tag: latest
