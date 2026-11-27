@@ -51,7 +51,7 @@ spec:
         tag: latest
     health-notification-service:
       image:
-        tag: v22
+        tag: v23
     statistics-service:
       image:
         tag: latest
